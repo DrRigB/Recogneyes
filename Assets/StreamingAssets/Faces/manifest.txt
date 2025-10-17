@@ -1,0 +1,17 @@
+# Face Recognition Training Manifest
+# Add one person name per line (must match folder names)
+# Lines starting with # are comments and will be ignored
+
+# Example:
+# John
+# Sarah
+# Mike
+
+# Add your people here:
+MrSekol
+Rigdon
+Alyssa
+Obama
+Jshlatt
+ScarlettJohansson
+

@@ -1,0 +1,39 @@
+# ============================================
+# MINIMAL .gitignore for Recogneyes Project
+# Custom OpenCV build - collaborators need everything!
+# ============================================
+
+# Unity Library folder (auto-generated, can be huge)
+Library/
+
+# Temp files
+Temp/
+
+# Build output folder
+Build/
+
+# Obj folder
+obj/
+
+# Logs
+Logs/
+
+# User-specific settings (don't share personal preferences)
+UserSettings/
+
+# Cursor chat logs (these are huge and not needed)
+cursor_*.md
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# ============================================
+# EVERYTHING ELSE IS COMMITTED:
+# - Assets/ (including OpenCV!)
+# - Packages/
+# - ProjectSettings/
+# - .csproj and .sln files
+# - Built APKs in Build/ folder are ignored above
+# ============================================
+
