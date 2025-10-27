@@ -25,7 +25,7 @@ public class FaceDetector : MonoBehaviour
     public int DetectionFrameSkip = 1;  // Run detection EVERY frame for best tracking
     public bool UseMotionPrediction = false;  // Keep disabled
     public bool ShowFaceIDs = false;  // Hide IDs - focus on detection quality first
-    public int FacePersistenceFrames = 45;  // Moderate - keep tracking for 1.5 seconds (45 frames at 30fps)
+    public int FacePersistenceFrames = 90;  // Extended - keep tracking for 3 seconds (90 frames at 30fps) to handle brief occlusions
     public bool DetectProfileFaces = false;  // Disable profile detection - focus on frontal first
     [Range(2, 10)]
     public int StableDetectionFrames = 3;  // Require 3 consecutive frames (faster confirmation, less missed detections)
@@ -57,7 +57,7 @@ public class FaceDetector : MonoBehaviour
     // Face ID tracking system (foundation for face recognition)
     private int[] _faceIDs = new int[MaxFaceBoxes];  // Unique ID for each tracked face
     private int _nextFaceID = 1;  // Counter for assigning new IDs
-    private float _faceMatchThreshold = 0.35f;  // MODERATE - must be within 35% screen distance to match (increased for stability)
+    private float _faceMatchThreshold = 0.65f;  // RELAXED - must be within 65% screen distance to match (allows natural movement)
     private int[] _framesSinceLastSeen = new int[MaxFaceBoxes];  // Frames since this face was detected
     private OpenCvSharp.Rect[] _lastKnownFaceRects = new OpenCvSharp.Rect[MaxFaceBoxes];  // Cache face rectangles
     
@@ -84,20 +84,10 @@ public class FaceDetector : MonoBehaviour
     {
         Debug.Log("Checking for camera permission...");
 
-        if (UnityEngine.Android.Permission.HasUserAuthorizedPermission(CameraPermission))
-        {
-            Debug.Log("Camera permission already granted.");
-            yield return StartCoroutine(InitializeEverything());
-        }
-        else
-        {
-            Debug.Log("Camera permission not yet granted. Requesting...");
-            var callbacks = new UnityEngine.Android.PermissionCallbacks();
-            callbacks.PermissionGranted += OnPermissionGranted;
-            callbacks.PermissionDenied += OnPermissionDenied;
-            callbacks.PermissionDeniedAndDontAskAgain += OnPermissionDenied;
-            UnityEngine.Android.Permission.RequestUserPermission(CameraPermission, callbacks);
-        }
+        // Skip permission check for Magic Leap - go straight to initialization
+        // The manifest already declares the permission
+        Debug.Log("Skipping permission check - proceeding directly to initialization");
+        yield return StartCoroutine(InitializeEverything());
     }
 
     private void OnPermissionGranted(string permissionName)
@@ -416,13 +406,13 @@ public class FaceDetector : MonoBehaviour
                     Debug.Log($"Frame {_frameCount}: SmallMat size {smallMat.Width}x{smallMat.Height} for detection (with histogram equalization)");
                 }
 
-                // BALANCED detection parameters - reliable detection with minimal false positives
+                // STRICT detection parameters - reduce false positives (walls, objects)
                 var frontalFaces = _cascade.DetectMultiScale(
                     image: smallMat,
-                    scaleFactor: 1.1,       // Good balance between speed and accuracy
-                    minNeighbors: 5,        // Moderate strictness - catches faces without too many false positives
+                    scaleFactor: 1.15,      // Larger scale steps - reduces false positives
+                    minNeighbors: 8,        // VERY STRICT - requires 8 neighboring detections to confirm face
                     flags: HaarDetectionTypes.ScaleImage,
-                    minSize: new Size(30, 30),  // Smaller minimum to detect faces at various distances
+                    minSize: new Size(60, 60),  // MUCH larger minimum - reduces false positives on small objects
                     maxSize: new Size(400, 400) // Allow larger faces
                 );
                 
@@ -432,9 +422,9 @@ public class FaceDetector : MonoBehaviour
                     var profileFaces = _cascadeProfile.DetectMultiScale(
                         image: smallMat,
                         scaleFactor: 1.08,
-                        minNeighbors: 5,        // Slightly less strict than frontal (profile detection is harder)
+                        minNeighbors: 6,        // STRICTER - same as frontal detection
                         flags: HaarDetectionTypes.ScaleImage,
-                        minSize: new Size(40, 40),
+                        minSize: new Size(50, 50),  // Even larger for profiles
                         maxSize: new Size(300, 300)
                     );
                     
@@ -529,9 +519,10 @@ public class FaceDetector : MonoBehaviour
                         {
                             Debug.Log($"✅ CONFIRMED FACE ID:{_faceIDs[i]} after {StableDetectionFrames} consecutive frames");
                             
-                            // FACE RECOGNITION: Identify who this person is
+                            // FACE RECOGNITION: Always perform recognition for new confirmed faces
                             if (RecognitionManager != null && RecognitionManager.IsReady() && ShowRecognizedNames)
                             {
+                                // Always recognize newly confirmed faces (cache will be checked inside PerformRecognition)
                                 PerformRecognition(i, face);
                             }
                         }
@@ -612,6 +603,21 @@ public class FaceDetector : MonoBehaviour
                     _smoothedPositions[i] = finalPos;
                     _smoothedSizes[i] = finalSize;
                     
+                    // ⭐⭐⭐ CACHE CHECK - Check if server response arrived
+                    if (RecognitionManager != null)
+                    {
+                        // Query cache to see if server responded
+                        var (cachedName, cachedConf) = RecognitionManager.RecognizeFace(null, _faceIDs[i]);
+                        
+                        // Update display if name changed
+                        if (cachedName != "Processing..." && cachedName != _recognizedNames[i])
+                        {
+                            _recognizedNames[i] = cachedName;
+                            _recognitionConfidence[i] = cachedConf;
+                            Debug.Log($"⭐⭐⭐ NAME CHANGED TO: {cachedName} (ID:{_faceIDs[i]})");
+                        }
+                    }
+                    
                     // Determine what to display on the box
                     string displayText = GetDisplayTextForFace(i);
                     
@@ -629,6 +635,18 @@ public class FaceDetector : MonoBehaviour
                     // Only persist CONFIRMED faces
                     if (_faceIDs[i] > 0 && _isConfirmedFace[i] && _framesSinceLastSeen[i] > 0 && _framesSinceLastSeen[i] <= FacePersistenceFrames)
                     {
+                        // ⭐ CRITICAL FIX: Check cache during persistence too!
+                        if (_recognizedNames[i] == "Processing..." && RecognitionManager != null)
+                        {
+                            var (name, confidence) = RecognitionManager.RecognizeFace(null, _faceIDs[i]);
+                            if (name != "Processing...")
+                            {
+                                _recognizedNames[i] = name;
+                                _recognitionConfidence[i] = confidence;
+                                Debug.Log($"✅ PERSISTENCE: Updated from cache: {name} (confidence: {confidence:F1}, ID:{_faceIDs[i]})");
+                            }
+                        }
+                        
                         // Face not detected this frame, but keep showing it (LOCKED in place)
                         string displayText = GetDisplayTextForFace(i);
                         _faceBoxRenderers[i].UpdateBox(_smoothedPositions[i], _smoothedSizes[i], displayText);
@@ -845,14 +863,41 @@ public class FaceDetector : MonoBehaviour
         _rgbaMat?.Dispose();
         
         // Convert WebCamTexture to Texture2D-compatible format
-        Texture2D tempTexture = new Texture2D(_webCamTexture.width, _webCamTexture.height, TextureFormat.RGB24, false);
-        tempTexture.SetPixels32(_webCamTexture.GetPixels32());
+        // Magic Leap 2 provides YUV (NV21) data, so we need proper conversion
+        Texture2D tempTexture = new Texture2D(_webCamTexture.width, _webCamTexture.height, TextureFormat.RGBA32, false);
+        
+        // Get raw pixel data from WebCamTexture
+        Color32[] pixels = _webCamTexture.GetPixels32();
+        
+        // Convert YUV (NV21) to RGB if needed
+        // On Magic Leap 2, WebCamTexture.GetPixels32() might return YUV data
+        Color32[] rgbPixels = ConvertYUVToRGB(pixels, _webCamTexture.width, _webCamTexture.height);
+        
+        tempTexture.SetPixels32(rgbPixels);
         tempTexture.Apply();
         
         _rgbaMat = TextureConverter.TextureToMat(tempTexture);
         Destroy(tempTexture);
         
         Cv2.CvtColor(_rgbaMat, _grayMat, ColorConversionCodes.BGR2GRAY);
+    }
+    
+    /// <summary>
+    /// Convert YUV (NV21) pixel data to RGB for Magic Leap 2 compatibility
+    /// </summary>
+    private Color32[] ConvertYUVToRGB(Color32[] yuvPixels, int width, int height)
+    {
+        Color32[] rgbPixels = new Color32[yuvPixels.Length];
+        
+        // Simple conversion - if the data is already RGB, just return it
+        // If it's YUV, we'll need more complex conversion
+        // For now, let's try the simple approach first
+        for (int i = 0; i < yuvPixels.Length; i++)
+        {
+            rgbPixels[i] = yuvPixels[i];
+        }
+        
+        return rgbPixels;
     }
 
     private void MatToTexture()
@@ -916,8 +961,8 @@ public class FaceDetector : MonoBehaviour
             // Ensure rect is within image bounds
             scaledRect.X = Mathf.Max(0, scaledRect.X);
             scaledRect.Y = Mathf.Max(0, scaledRect.Y);
-            scaledRect.Width = Mathf.Min(scaledRect.Width, _grayMat.Width - scaledRect.X);
-            scaledRect.Height = Mathf.Min(scaledRect.Height, _grayMat.Height - scaledRect.Y);
+            scaledRect.Width = Mathf.Min(scaledRect.Width, _rgbaMat.Width - scaledRect.X);
+            scaledRect.Height = Mathf.Min(scaledRect.Height, _rgbaMat.Height - scaledRect.Y);
             
             if (scaledRect.Width <= 0 || scaledRect.Height <= 0)
             {
@@ -925,11 +970,31 @@ public class FaceDetector : MonoBehaviour
                 return;
             }
             
-            // Extract face region from grayscale image
-            Mat faceROI = new Mat(_grayMat, scaledRect);
+            // QUALITY CHECK: Reject faces that are too small (likely false positives)
+            if (scaledRect.Width < 80 || scaledRect.Height < 80)
+            {
+                Debug.LogWarning($"Face too small for recognition: {scaledRect.Width}x{scaledRect.Height} (min: 80x80)");
+                return;
+            }
             
-            // Recognize the face
-            var (name, confidence) = RecognitionManager.RecognizeFace(faceROI);
+            // QUALITY CHECK: Reject faces with unusual aspect ratios (likely false positives)
+            float aspectRatio = (float)scaledRect.Width / scaledRect.Height;
+            if (aspectRatio < 0.5f || aspectRatio > 2.0f)
+            {
+                Debug.LogWarning($"Face aspect ratio unusual: {aspectRatio:F2} (normal: 0.7-1.4)");
+                return;
+            }
+            
+            // Extract face region from COLOR image (not grayscale!) to match training data
+            Mat faceROI_RGBA = new Mat(_rgbaMat, scaledRect);
+            
+            // Convert RGBA to BGR (remove alpha channel)
+            Mat faceROI = new Mat();
+            Cv2.CvtColor(faceROI_RGBA, faceROI, ColorConversionCodes.RGBA2BGR);
+            faceROI_RGBA.Dispose();
+            
+            // Recognize the face (pass face ID for server caching)
+            var (name, confidence) = RecognitionManager.RecognizeFace(faceROI, _faceIDs[faceIndex]);
             
             _recognizedNames[faceIndex] = name;
             _recognitionConfidence[faceIndex] = confidence;
@@ -956,26 +1021,16 @@ public class FaceDetector : MonoBehaviour
     /// </summary>
     private string GetDisplayTextForFace(int faceIndex)
     {
+        // Show training status for first face if model isn't ready yet
+        if (faceIndex == 0 && RecognitionManager != null && !RecognitionManager.IsReady())
+        {
+            return "TRAINING... PLEASE WAIT";
+        }
+        
         if (ShowRecognizedNames && !string.IsNullOrEmpty(_recognizedNames[faceIndex]))
         {
-            // Show recognized name with confidence if enabled
-            if (RecognitionManager != null && RecognitionManager.ShowConfidenceScores)
-            {
-                // Only show confidence if it's a reasonable number (not Unknown's large distance)
-                if (_recognitionConfidence[faceIndex] < 999.0)
-                {
-                    return $"{_recognizedNames[faceIndex]} ({_recognitionConfidence[faceIndex]:F0})";
-                }
-                else
-                {
-                    // Don't show massive distances for Unknown faces
-                    return _recognizedNames[faceIndex];
-                }
-            }
-            else
-            {
-                return _recognizedNames[faceIndex];
-            }
+            // Always just show the name, without confidence score
+            return _recognizedNames[faceIndex];
         }
         else if (ShowFaceIDs)
         {

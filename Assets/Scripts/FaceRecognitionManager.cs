@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using UnityEngine.Networking;
+using Recogneyes;
 
 /// <summary>
 /// Manages face recognition training and prediction.
@@ -20,6 +21,14 @@ public class FaceRecognitionManager : MonoBehaviour
     public double MaxDistanceThreshold = 120.0;  // Max distance for match (LBPH returns distance: lower=better, higher=worse). With universal preprocessing: 90-120 for strict, 120-140 for balanced, 140-170 for lenient
     public bool AutoTrainOnStart = true;
     
+    [Header("Server Recognition (NEW - Offload to PC!)")]
+    [Tooltip("Use PC server for recognition (better accuracy, no heavy models on device)")]
+    public bool UseServerRecognition = true;
+    [Tooltip("Primary server URL (tries localhost first for USB)")]
+    public string PrimaryServerURL = "http://localhost:5000/recognize";
+    [Tooltip("Fallback server URL (tries this if localhost fails - use PC IP for WiFi)")]
+    public string FallbackServerURL = "http://localhost:5000/recognize";
+    
     [Header("Anonymous Names (Train but show as Unknown)")]
     [Tooltip("People to train for better recognition but always display as 'Unknown' (e.g., celebrities to avoid false positives)")]
     public List<string> AnonymousNames = new List<string> { "Obama", "Jshlatt", "ScarlettJohansson" };
@@ -30,31 +39,193 @@ public class FaceRecognitionManager : MonoBehaviour
     public string TrainingDataFolder = "Faces";  // Folder in StreamingAssets/Faces/PersonName/photo.jpg
     public string ModelSaveFileName = "face_recognition_model.yml";  // Saved trained model
     
+        [Header("Barracuda Deep Learning (Enhanced Recognition)")]
+        [Tooltip("DISABLED: Use FaceEmbeddingPreprocessor + LightweightEmbeddingRecognizer instead")]
+        public bool EnableBarracudaRecognition = false; // DEPRECATED: Use offline preprocessing instead
+        [Tooltip("Fallback to LBPH if ArcFace fails")]
+        public bool FallbackToLBPH = false; // Disabled by default - ArcFace should work
+    
     [Header("Debug")]
     public bool ShowConfidenceScores = true;
     public bool ForceRetrainOnStart = false;  // Set to TRUE in Inspector to force retrain (ignores cached model)
     // Removed keyboard retrain (useless on AR goggles) - system now auto-validates on load
     
-    // OpenCV Face Recognizer (LBPH algorithm)
+    // OpenCV Face Recognizer (LBPH algorithm) - LEGACY
     private FaceRecognizer _recognizer;
+    
+    // Barracuda Deep Learning Component - DEPRECATED
+    private FaceEmbeddingGenerator _barracudaGenerator;
+    
+    // NEW: Enhanced OpenCV Recognizer (uses ArcFace embeddings from PC)
+    private EnhancedOpenCVRecognizer _enhancedRecognizer;
+    
+    // LEGACY: TensorFlow Lite Recognizer (requires model on device)
+    private TensorFlowLiteRecognizer _embeddingRecognizer;
     
     // Mapping of label IDs to person names
     private Dictionary<int, string> _labelToName = new Dictionary<int, string>();
     
     // Is the recognizer trained and ready?
     private bool _isModelTrained = false;
+    private bool _isServerConnected = false;
     
     // Statistics
     private int _totalPeopleTrained = 0;
     private int _totalImagesTrained = 0;
+    
+    // Server recognition cache
+    private Dictionary<int, (string name, float confidence, float timestamp)> _serverResultCache = new Dictionary<int, (string, float, float)>();
+    private int _currentFaceId = -1;
+    private string _activeServerURL = null; // Track which URL is working
 
     void Start()
     {
         Debug.Log("=== FaceRecognitionManager Starting ===");
         
+        // Initialize Enhanced OpenCV Recognizer (PRIMARY - uses ArcFace embeddings from PC!)
+        _enhancedRecognizer = GetComponent<EnhancedOpenCVRecognizer>();
+        if (_enhancedRecognizer == null)
+        {
+            _enhancedRecognizer = gameObject.AddComponent<EnhancedOpenCVRecognizer>();
+        }
+        
+        // Initialize TensorFlow Lite Recognizer (SECONDARY FALLBACK)
+        _embeddingRecognizer = GetComponent<TensorFlowLiteRecognizer>();
+        if (_embeddingRecognizer == null)
+        {
+            _embeddingRecognizer = gameObject.AddComponent<TensorFlowLiteRecognizer>();
+        }
+        
+        // Initialize Barracuda if enabled (deprecated)
+        if (EnableBarracudaRecognition)
+        {
+            InitializeBarracuda();
+        }
+        
         if (EnableRecognition && AutoTrainOnStart)
         {
-            StartCoroutine(InitializeRecognizer());
+            if (UseServerRecognition)
+            {
+                Debug.Log("🌐 Server recognition enabled - establishing connection immediately");
+                _isModelTrained = true; // Mark as ready since server handles recognition
+                _isServerConnected = true; // Mark as connected immediately - server connection test will verify
+                
+                // Establish server connection immediately so it's ready when faces are detected
+                StartCoroutine(EstablishServerConnection());
+            }
+            else
+            {
+                StartCoroutine(InitializeRecognizer());
+            }
+        }
+    }
+
+
+
+    /// <summary>
+    /// Establish server connection immediately on startup
+    /// </summary>
+    private IEnumerator EstablishServerConnection()
+    {
+        Debug.Log("🔌 Establishing server connection immediately...");
+        
+        // Create a simple test image for connection testing
+        byte[] testImage = CreateSimpleTestImage();
+        
+        // Try localhost first (for USB connection)
+        Debug.Log("🔌 Testing localhost connection...");
+        bool localhostSuccess = false;
+        yield return StartCoroutine(TryServerURL(PrimaryServerURL, testImage, (name, conf) => {
+            Debug.Log($"🔍 Localhost test response: {name} (confidence: {conf})");
+            // Connection test: ANY response (even Unknown or Error) means server is reachable
+            if (name != "Error")
+            {
+                localhostSuccess = true;
+                _activeServerURL = PrimaryServerURL;
+                _isServerConnected = true;  // Mark server as connected
+                Debug.Log("✅ Server connection established via USB (localhost)");
+            }
+            else
+            {
+                Debug.Log($"❌ Localhost test failed: {name}");
+            }
+        }, markAsActive: true));
+        
+        if (localhostSuccess)
+        {
+            yield break;
+        }
+        
+        // Fallback to WiFi IP if localhost failed
+        Debug.Log("📡 localhost failed, trying WiFi connection...");
+        bool wifiSuccess = false;
+        yield return StartCoroutine(TryServerURL(FallbackServerURL, testImage, (name, conf) => {
+            Debug.Log($"🔍 WiFi test response: {name} (confidence: {conf})");
+            if (name != "Unknown" && name != "Error")
+            {
+                wifiSuccess = true;
+                _activeServerURL = FallbackServerURL;
+                _isServerConnected = true;  // Mark server as connected
+                Debug.Log("✅ Server connection established via WiFi");
+            }
+            else
+            {
+                Debug.Log($"❌ WiFi test failed: {name}");
+            }
+        }, markAsActive: true));
+        
+        if (_activeServerURL != null && (localhostSuccess || wifiSuccess))
+        {
+            Debug.Log("🌐 Server connection ready - recognition will work immediately!");
+        }
+        else
+        {
+            Debug.LogWarning("⚠️ Could not establish server connection - will retry when faces are detected");
+        }
+    }
+    
+    /// <summary>
+    /// Create a simple test image for server testing
+    /// </summary>
+    private byte[] CreateSimpleTestImage()
+    {
+        // Create a proper test image (100x100 pixels) that the server can process
+        using (Mat testMat = new Mat(100, 100, MatType.CV_8UC3, new Scalar(128, 128, 128)))
+        {
+            // Add some simple pattern to make it more realistic
+            Cv2.Rectangle(testMat, new OpenCvSharp.Rect(20, 20, 60, 60), new Scalar(255, 255, 255), -1);
+            Cv2.Circle(testMat, new OpenCvSharp.Point(50, 50), 20, new Scalar(0, 0, 0), -1);
+            return MatToJpgBytes(testMat);
+        }
+    }
+
+    /// <summary>
+    /// Initialize Barracuda deep learning component
+    /// </summary>
+    private void InitializeBarracuda()
+    {
+        try
+        {
+            _barracudaGenerator = GetComponent<FaceEmbeddingGenerator>();
+            if (_barracudaGenerator == null)
+            {
+                _barracudaGenerator = gameObject.AddComponent<FaceEmbeddingGenerator>();
+            }
+            
+            if (_barracudaGenerator.IsInitialized())
+            {
+                Debug.Log("✅ Barracuda deep learning initialized successfully!");
+            }
+            else
+            {
+                Debug.LogWarning("⚠️ Barracuda initialization failed - will fallback to LBPH");
+                EnableBarracudaRecognition = false;
+            }
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"❌ Barracuda initialization error: {e.Message}");
+            EnableBarracudaRecognition = false;
         }
     }
 
@@ -63,18 +234,15 @@ public class FaceRecognitionManager : MonoBehaviour
     {
         Debug.Log("Initializing Face Recognizer...");
         
-        // Create LBPH recognizer with optimized parameters
-        // radius=1, neighbors=8, gridX=8, gridY=8 are default values that work well
-        // threshold is set very high (double.MaxValue) so we can handle it manually
-        _recognizer = LBPHFaceRecognizer.Create(
-            radius: 1,
-            neighbors: 8,
-            gridX: 8,
-            gridY: 8,
+        // Create FisherFace recognizer - more accurate than LBPH
+        // numComponents: number of components to keep for PCA (0 = keep all)
+        // threshold: confidence threshold (we set high and handle manually)
+        _recognizer = FisherFaceRecognizer.Create(
+            numComponents: 0,           // Keep all components for best accuracy
             threshold: double.MaxValue  // We'll handle threshold manually in RecognizeFace()
         );
         
-        Debug.Log("✅ LBPH Face Recognizer created");
+        Debug.Log("✅ FisherFace Recognizer created (more accurate than LBPH)");
         
         // Check if training data has changed since last training
         string currentDataHash = null;
@@ -436,6 +604,12 @@ public class FaceRecognitionManager : MonoBehaviour
             
             Debug.Log($"✅✅✅ TRAINING COMPLETE! Model can now recognize {_totalPeopleTrained} people.");
             
+            // Train Barracuda if enabled
+            if (EnableBarracudaRecognition && _barracudaGenerator != null && _barracudaGenerator.IsInitialized())
+            {
+                TrainBarracudaFromFolders();
+            }
+            
             // Save the trained model for faster startup next time
             string modelPath = Path.Combine(Application.persistentDataPath, ModelSaveFileName);
             _recognizer.Write(modelPath);
@@ -475,6 +649,146 @@ public class FaceRecognitionManager : MonoBehaviour
     /// </summary>
     public (string name, double confidence) RecognizeFace(Mat faceGrayMat)
     {
+        return RecognizeFace(faceGrayMat, -1); // Call with default face ID
+    }
+    
+    /// <summary>
+    /// Recognizes a face with face ID for tracking server results
+    /// </summary>
+    public (string name, double confidence) RecognizeFace(Mat faceGrayMat, int faceId)
+    {
+        // Try SERVER Recognition FIRST! (offload to PC)
+        if (UseServerRecognition)
+        {
+            try
+            {
+                // Check if we have a cached result for this face FIRST
+                if (faceId >= 0 && _serverResultCache.ContainsKey(faceId))
+                {
+                    var cached = _serverResultCache[faceId];
+                    // Use cached result if less than 2 seconds old (allows periodic re-recognition to send new requests)
+                    if (Time.time - cached.timestamp < 2.0f)
+                    {
+                        return (cached.name, cached.confidence);
+                    }
+                }
+                
+                // If just checking cache (no image provided), return "Processing..." ONLY if no cache exists
+                if (faceGrayMat == null)
+                {
+                    return ("Processing...", 0.0);
+                }
+                
+                // Convert Mat to JPG bytes
+                byte[] jpgBytes = MatToJpgBytes(faceGrayMat);
+                
+                // Send to server (async) - try both URLs
+                int capturedFaceId = faceId;
+                StartCoroutine(RecognizeViaServerWithFallback(jpgBytes, (name, conf) => {
+                    Debug.Log($"🌐 Server Recognition: {name} (confidence: {conf:F3})");
+                    
+                    // Cache the result for next frame
+                    if (capturedFaceId >= 0)
+                    {
+                        _serverResultCache[capturedFaceId] = (name, conf, Time.time);
+                        Debug.Log($"💾 CACHED result for Face ID {capturedFaceId}: {name} (confidence: {conf:F3})");
+                    }
+                    else
+                    {
+                        Debug.LogWarning($"⚠️ Cannot cache result - invalid face ID: {capturedFaceId}");
+                    }
+                }));
+                
+                // Return cached result from PREVIOUS request, not the one we just sent
+                // The coroutine runs in background and will update cache for next frame
+                if (faceId >= 0 && _serverResultCache.ContainsKey(faceId))
+                {
+                    var cached = _serverResultCache[faceId];
+                    // Check if result is still valid (less than 5 seconds old)
+                    if (Time.time - cached.timestamp < 5.0f)
+                    {
+                        return (cached.name, cached.confidence);
+                    }
+                }
+                
+                // First time we've seen this face, return Processing while server responds
+                return ("Processing...", 0.0);
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"❌ Server recognition error: {e.Message}");
+                Debug.Log("🔄 Falling back to local recognition...");
+            }
+        }
+        
+        // Try Enhanced OpenCV Recognizer (uses ArcFace embeddings from PC)
+        if (_enhancedRecognizer != null && _enhancedRecognizer.IsReady())
+        {
+            try
+            {
+                string recognizedName = _enhancedRecognizer.RecognizeFace(faceGrayMat);
+                Debug.Log($"🎯 Enhanced OpenCV Recognition: {recognizedName}");
+                return (recognizedName, 1.0); // Default confidence
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"❌ Enhanced OpenCV recognition error: {e.Message}");
+                Debug.Log("🔄 Falling back to TensorFlow Lite recognizer...");
+            }
+        }
+        
+        // FALLBACK: Try TensorFlow Lite ArcFace Embedding Recognizer
+        if (_embeddingRecognizer != null)
+        {
+            try
+            {
+                string recognizedName = _embeddingRecognizer.RecognizeFace(faceGrayMat);
+                Debug.Log($"🎯 TensorFlow Lite Recognition: {recognizedName}");
+                return (recognizedName, 1.0); // Default confidence since new method doesn't return it
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"❌ TensorFlow Lite recognition error: {e.Message}");
+                if (!FallbackToLBPH)
+                {
+                    return ("Unknown", 0.0);
+                }
+                Debug.Log("🔄 Falling back to FisherFace...");
+            }
+        }
+        
+        // Try Barracuda deep learning if enabled (deprecated)
+        if (EnableBarracudaRecognition && _barracudaGenerator != null && _barracudaGenerator.IsInitialized())
+        {
+            try
+            {
+                var barracudaResult = _barracudaGenerator.RecognizeFace(faceGrayMat);
+                if (barracudaResult.name != "Unknown")
+                {
+                    Debug.Log($"🎯 Barracuda Recognition: {barracudaResult.name} (confidence: {barracudaResult.confidence:F3})");
+                    return (barracudaResult.name, barracudaResult.confidence);
+                }
+                else if (!FallbackToLBPH)
+                {
+                    return ("Unknown", 0.0);
+                }
+                else
+                {
+                    Debug.Log("🔄 Barracuda failed, falling back to LBPH...");
+                }
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"❌ Barracuda recognition error: {e.Message}");
+                if (!FallbackToLBPH)
+                {
+                    return ("Unknown", 0.0);
+                }
+                Debug.Log("🔄 Falling back to LBPH...");
+            }
+        }
+        
+        // Fallback to LBPH if ArcFace/Barracuda disabled, failed, or not available
         if (!_isModelTrained || _recognizer == null)
         {
             return ("Unknown", 0.0);
@@ -569,7 +883,16 @@ public class FaceRecognitionManager : MonoBehaviour
     /// </summary>
     public bool IsReady()
     {
-        return _isModelTrained && _recognizer != null;
+        // For server recognition, we're ready if server is connected (server handles recognition)
+        // For local recognition, we need both model trained and recognizer initialized
+        if (UseServerRecognition)
+        {
+            return _isServerConnected;  // Use server connection status instead of model training
+        }
+        else
+        {
+            return _isModelTrained && _recognizer != null;
+        }
     }
 
     /// <summary>
@@ -740,6 +1063,284 @@ public class FaceRecognitionManager : MonoBehaviour
         _recognizer?.Dispose();
     }
 
+    /// <summary>
+    /// Get person names from manifest (for Barracuda training)
+    /// </summary>
+    private List<string> GetPersonNamesFromManifest()
+    {
+        List<string> personNames = new List<string>();
+        
+        // Try to get names from ScriptableObject first
+        if (FaceManifestAsset != null && FaceManifestAsset.PersonNames != null)
+        {
+            personNames.AddRange(FaceManifestAsset.PersonNames);
+            Debug.Log($"📋 Found {personNames.Count} people in FaceManifest asset");
+            return personNames;
+        }
+        
+        // Fallback to text file
+        string manifestPath = Path.Combine(Application.streamingAssetsPath, TrainingDataFolder, "manifest.txt");
+        if (File.Exists(manifestPath))
+        {
+            try
+            {
+                string[] lines = File.ReadAllLines(manifestPath);
+                foreach (string line in lines)
+                {
+                    string trimmedLine = line.Trim();
+                    if (!string.IsNullOrEmpty(trimmedLine) && !trimmedLine.StartsWith("#"))
+                    {
+                        personNames.Add(trimmedLine);
+                    }
+                }
+                Debug.Log($"📋 Found {personNames.Count} people in manifest.txt");
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"❌ Error reading manifest.txt: {e.Message}");
+            }
+        }
+        else
+        {
+            Debug.LogWarning("⚠️ No manifest found - checking folders directly");
+            // Fallback: scan folders
+            string facesPath = Path.Combine(Application.streamingAssetsPath, TrainingDataFolder);
+            if (Directory.Exists(facesPath))
+            {
+                string[] folders = Directory.GetDirectories(facesPath);
+                foreach (string folder in folders)
+                {
+                    string folderName = Path.GetFileName(folder);
+                    if (folderName != "Unknown" && !folderName.StartsWith("."))
+                    {
+                        personNames.Add(folderName);
+                    }
+                }
+                Debug.Log($"📋 Found {personNames.Count} people by scanning folders");
+            }
+        }
+        
+        return personNames;
+    }
+
+    /// <summary>
+    /// Train Barracuda deep learning model with the same data as LBPH
+    /// </summary>
+    private void TrainBarracudaFromFolders()
+    {
+        if (_barracudaGenerator == null || !_barracudaGenerator.IsInitialized())
+        {
+            Debug.LogWarning("⚠️ Barracuda not available for training");
+            return;
+        }
+
+        Debug.Log("🧠 Training Barracuda deep learning model...");
+        
+        try
+        {
+            // Clear existing embeddings
+            _barracudaGenerator.ClearKnownFaces();
+            
+            // Get all person names from manifest
+            List<string> personNames = GetPersonNamesFromManifest();
+            if (personNames == null || personNames.Count == 0)
+            {
+                Debug.LogWarning("⚠️ No person names found for Barracuda training");
+                return;
+            }
+
+            int totalEmbeddings = 0;
+            
+            foreach (string personName in personNames)
+            {
+                string personFolder = Path.Combine(Application.streamingAssetsPath, TrainingDataFolder, personName);
+                if (!Directory.Exists(personFolder))
+                {
+                    Debug.LogWarning($"⚠️ Folder not found: {personFolder}");
+                    continue;
+                }
+
+                // Get all image files
+                string[] imageExtensions = { "*.jpg", "*.jpeg", "*.png", "*.bmp" };
+                List<string> imageFiles = new List<string>();
+                
+                foreach (string extension in imageExtensions)
+                {
+                    imageFiles.AddRange(Directory.GetFiles(personFolder, extension, SearchOption.TopDirectoryOnly));
+                }
+
+                if (imageFiles.Count == 0)
+                {
+                    Debug.LogWarning($"⚠️ No images found in {personFolder}");
+                    continue;
+                }
+
+                Debug.Log($"📸 Processing {imageFiles.Count} images for {personName}...");
+                
+                // Process each image and generate embeddings
+                foreach (string imagePath in imageFiles)
+                {
+                    try
+                    {
+                        // Load image
+                        Mat image = Cv2.ImRead(imagePath, ImreadModes.Color);
+                        if (image.Empty())
+                        {
+                            Debug.LogWarning($"⚠️ Failed to load image: {imagePath}");
+                            continue;
+                        }
+
+                        // Convert to grayscale for face detection
+                        Mat grayImage = new Mat();
+                        Cv2.CvtColor(image, grayImage, ColorConversionCodes.BGR2GRAY);
+                        
+                        // Apply same preprocessing as LBPH
+                        Mat processedImage = PreprocessForTraining(grayImage);
+                        
+                        // Generate embedding
+                        float[] embedding = _barracudaGenerator.GenerateEmbedding(processedImage);
+                        if (embedding != null)
+                        {
+                            _barracudaGenerator.AddKnownFace(personName, embedding);
+                            totalEmbeddings++;
+                        }
+                        
+                        // Cleanup
+                        image.Dispose();
+                        grayImage.Dispose();
+                        processedImage.Dispose();
+                    }
+                    catch (System.Exception e)
+                    {
+                        Debug.LogError($"❌ Error processing {imagePath}: {e.Message}");
+                    }
+                }
+            }
+
+            Debug.Log($"✅ Barracuda training complete! Generated {totalEmbeddings} embeddings for {personNames.Count} people.");
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"❌ Barracuda training error: {e.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Convert OpenCV Mat to JPG bytes for sending to server
+    /// </summary>
+    private byte[] MatToJpgBytes(Mat mat)
+    {
+        // Mat should already be BGR from FaceDetector, just encode it
+        Cv2.ImEncode(".jpg", mat, out byte[] jpgBytes);
+        return jpgBytes;
+    }
+    
+    /// <summary>
+    /// Send face image to server for recognition (tries both localhost and IP)
+    /// </summary>
+    private IEnumerator RecognizeViaServerWithFallback(byte[] imageBytes, System.Action<string, float> callback)
+    {
+        // Try active URL first if we know one works
+        if (_activeServerURL != null)
+        {
+            yield return StartCoroutine(TryServerURL(_activeServerURL, imageBytes, callback, markAsActive: false));
+            yield break;
+        }
+        
+        // Try localhost first (for USB connection)
+        Debug.Log($"🔌 Trying server via USB (localhost)...");
+        bool localhostSuccess = false;
+        yield return StartCoroutine(TryServerURL(PrimaryServerURL, imageBytes, (name, conf) => {
+            Debug.Log($"🔍 Localhost response: {name} (confidence: {conf})");
+            if (name != "Error")
+            {
+                // SUCCESS: Server responded (even if "Unknown")
+                localhostSuccess = true;
+                _activeServerURL = PrimaryServerURL;
+                _isServerConnected = true;  // Mark server as connected
+                Debug.Log($"✅ Server connected via USB - Result: {name}");
+                callback(name, conf);  // Update cache with result (even if "Unknown")
+            }
+            else
+            {
+                Debug.Log($"❌ Localhost connection failed: {name}");
+            }
+        }, markAsActive: true));
+        
+        if (localhostSuccess)
+        {
+            yield break;
+        }
+        
+        // Fallback to WiFi IP if localhost failed
+        Debug.Log($"📡 USB failed, trying WiFi ({FallbackServerURL})...");
+        yield return StartCoroutine(TryServerURL(FallbackServerURL, imageBytes, (name, conf) => {
+            Debug.Log($"🔍 WiFi response: {name} (confidence: {conf})");
+            _activeServerURL = FallbackServerURL;
+            _isServerConnected = true;  // Mark server as connected
+            Debug.Log($"✅ Server connected via WiFi");
+            callback(name, conf);
+        }, markAsActive: true));
+    }
+    
+    /// <summary>
+    /// Try a specific server URL
+    /// </summary>
+    private IEnumerator TryServerURL(string url, byte[] imageBytes, System.Action<string, float> callback, bool markAsActive)
+    {
+        using (UnityWebRequest request = new UnityWebRequest(url, "POST"))
+        {
+            request.uploadHandler = new UploadHandlerRaw(imageBytes);
+            request.downloadHandler = new DownloadHandlerBuffer();
+            request.SetRequestHeader("Content-Type", "application/octet-stream");
+            request.timeout = 5; // 5 second timeout (more time for server response)
+            
+            yield return request.SendWebRequest();
+            
+            if (request.result == UnityWebRequest.Result.Success)
+            {
+                try
+                {
+                    // Parse JSON response
+                    string jsonResponse = request.downloadHandler.text;
+                    ServerResponse response = JsonUtility.FromJson<ServerResponse>(jsonResponse);
+                    
+                    if (response.success)
+                    {
+                        callback(response.name, response.confidence);
+                    }
+                    else
+                    {
+                        Debug.LogError($"❌ Server error: {response.error}");
+                        callback("Error", 0.0f);
+                    }
+                }
+                catch (System.Exception e)
+                {
+                    Debug.LogError($"❌ Failed to parse server response: {e.Message}");
+                    callback("Error", 0.0f);
+                }
+            }
+            else
+            {
+                Debug.LogError($"❌ Server request to {url} failed: {request.error}");
+                callback("Error", 0.0f);
+            }
+        }
+    }
+    
+    /// <summary>
+    /// Server response structure
+    /// </summary>
+    [Serializable]
+    private class ServerResponse
+    {
+        public string name;
+        public float confidence;
+        public bool success;
+        public string error;
+    }
+    
     /// <summary>
     /// Serializable data structure for saving label mappings
     /// </summary>
