@@ -195,53 +195,33 @@ def recognize_face(face_image):
     if live_embedding is None:
         return "Error", 0.0
     
-    # Find best match and track all person averages
-    person_scores = {}  # Track average similarity per person
-    
+    best_match_name = "Unknown"
+    best_match_similarity = 0.0
+
+    # Find the best single match across all people and all their embeddings
     for person_name, stored_embeddings in known_embeddings.items():
-        similarities = []
         for stored_embedding in stored_embeddings:
             similarity = cosine_similarity(live_embedding, stored_embedding)
-            similarities.append(similarity)
-        
-        # Calculate average similarity for this person
-        avg_similarity = sum(similarities) / len(similarities)
-        person_scores[person_name] = avg_similarity
-    
-    # Find best match based on AVERAGE similarity per person
-    best_match = "Unknown"
-    best_similarity = 0.0
-    for person_name, avg_score in person_scores.items():
-        if avg_score > best_similarity:
-            best_similarity = avg_score
-            best_match = person_name
-    
+            if similarity > best_match_similarity:
+                best_match_similarity = similarity
+                best_match_name = person_name
+
     # DEBUG: Print detailed similarity analysis
     print(f"[DEBUG] Input embedding norm: {np.linalg.norm(live_embedding):.6f}")
-    print(f"[DEBUG] Similarity scores:")
-    for person, score in sorted(person_scores.items(), key=lambda x: x[1], reverse=True):
-        embeddings_count = len(known_embeddings[person])
-        print(f"  {person}: {score:.3f} (from {embeddings_count} embeddings)")
-        # Show individual embedding similarities for first person
-        if person == sorted(person_scores.items(), key=lambda x: x[1], reverse=True)[0][0]:
-            similarities = []
-            for stored_embedding in known_embeddings[person]:
-                similarity = cosine_similarity(live_embedding, stored_embedding)
-                similarities.append(similarity)
-                print(f"    Individual similarities: {[f'{s:.6f}' for s in similarities[:3]]}{'...' if len(similarities) > 3 else ''}")
-    
-    # Apply threshold
-    if best_similarity >= SIMILARITY_THRESHOLD:
+    print(f"[DEBUG] Best overall match: {best_match_name} with similarity {best_match_similarity:.3f}")
+
+    # Apply threshold to the single best match
+    if best_match_similarity >= SIMILARITY_THRESHOLD:
         # Check if person should be shown as anonymous
-        if best_match in ANONYMOUS_NAMES:
-            print(f"[ANON] Recognized {best_match} (similarity: {best_similarity:.3f}) -> Showing as Unknown")
-            return "Unknown", best_similarity
+        if best_match_name in ANONYMOUS_NAMES:
+            print(f"[ANON] Recognized {best_match_name} (similarity: {best_match_similarity:.3f}) -> Showing as Unknown")
+            return "Unknown", best_match_similarity
         else:
-            print(f"[OK] Recognized: {best_match} (similarity: {best_similarity:.3f})")
-            return best_match, best_similarity
+            print(f"[OK] Recognized: {best_match_name} (similarity: {best_match_similarity:.3f})")
+            return best_match_name, best_match_similarity
     else:
-        print(f"[REJECT] Best match {best_match} below threshold (similarity: {best_similarity:.3f} < {SIMILARITY_THRESHOLD})")
-        return "Unknown", best_similarity
+        print(f"[REJECT] Best match {best_match_name} below threshold (similarity: {best_match_similarity:.3f} < {SIMILARITY_THRESHOLD})")
+        return "Unknown", best_match_similarity
 
 @app.route('/recognize', methods=['POST'])
 def recognize():
@@ -262,8 +242,13 @@ def recognize():
         
         print(f"[RECV] Received image: {image.shape}")
         
-        # Recognize face directly - no preprocessing needed, ArcFace handles it
-        name, confidence = recognize_face(image)
+        # --- PREPROCESSING STEP ---
+        # Align the face to improve recognition accuracy, making it consistent with training data
+        print("[PREPROC] Aligning face before recognition...")
+        aligned_image = align_face_landmarks(image)
+        
+        # Recognize the aligned face
+        name, confidence = recognize_face(aligned_image)
         
         # Return result
         return jsonify({

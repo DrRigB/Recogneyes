@@ -7,7 +7,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using UnityEngine.Networking;
-using Recogneyes;
 
 /// <summary>
 /// Manages face recognition training and prediction.
@@ -53,15 +52,6 @@ public class FaceRecognitionManager : MonoBehaviour
     // OpenCV Face Recognizer (LBPH algorithm) - LEGACY
     private FaceRecognizer _recognizer;
     
-    // Barracuda Deep Learning Component - DEPRECATED
-    private FaceEmbeddingGenerator _barracudaGenerator;
-    
-    // NEW: Enhanced OpenCV Recognizer (uses ArcFace embeddings from PC)
-    private EnhancedOpenCVRecognizer _enhancedRecognizer;
-    
-    // LEGACY: TensorFlow Lite Recognizer (requires model on device)
-    private TensorFlowLiteRecognizer _embeddingRecognizer;
-    
     // Mapping of label IDs to person names
     private Dictionary<int, string> _labelToName = new Dictionary<int, string>();
     
@@ -83,18 +73,18 @@ public class FaceRecognitionManager : MonoBehaviour
         Debug.Log("=== FaceRecognitionManager Starting ===");
         
         // Initialize Enhanced OpenCV Recognizer (PRIMARY - uses ArcFace embeddings from PC!)
-        _enhancedRecognizer = GetComponent<EnhancedOpenCVRecognizer>();
-        if (_enhancedRecognizer == null)
-        {
-            _enhancedRecognizer = gameObject.AddComponent<EnhancedOpenCVRecognizer>();
-        }
+        // _enhancedRecognizer = GetComponent<EnhancedOpenCVRecognizer>(); // Removed
+        // if (_enhancedRecognizer == null)
+        // {
+        //     _enhancedRecognizer = gameObject.AddComponent<EnhancedOpenCVRecognizer>();
+        // }
         
         // Initialize TensorFlow Lite Recognizer (SECONDARY FALLBACK)
-        _embeddingRecognizer = GetComponent<TensorFlowLiteRecognizer>();
-        if (_embeddingRecognizer == null)
-        {
-            _embeddingRecognizer = gameObject.AddComponent<TensorFlowLiteRecognizer>();
-        }
+        // _embeddingRecognizer = GetComponent<TensorFlowLiteRecognizer>(); // Removed
+        // if (_embeddingRecognizer == null)
+        // {
+        //     _embeddingRecognizer = gameObject.AddComponent<TensorFlowLiteRecognizer>();
+        // }
         
         // Initialize Barracuda if enabled (deprecated)
         if (EnableBarracudaRecognition)
@@ -206,21 +196,21 @@ public class FaceRecognitionManager : MonoBehaviour
     {
         try
         {
-            _barracudaGenerator = GetComponent<FaceEmbeddingGenerator>();
-            if (_barracudaGenerator == null)
-            {
-                _barracudaGenerator = gameObject.AddComponent<FaceEmbeddingGenerator>();
-            }
+            // _barracudaGenerator = GetComponent<FaceEmbeddingGenerator>(); // Removed
+            // if (_barracudaGenerator == null)
+            // {
+            //     _barracudaGenerator = gameObject.AddComponent<FaceEmbeddingGenerator>();
+            // }
             
-            if (_barracudaGenerator.IsInitialized())
-            {
-                Debug.Log("✅ Barracuda deep learning initialized successfully!");
-            }
-            else
-            {
-                Debug.LogWarning("⚠️ Barracuda initialization failed - will fallback to LBPH");
-                EnableBarracudaRecognition = false;
-            }
+            // if (_barracudaGenerator.IsInitialized()) // Removed
+            // {
+            //     Debug.Log("✅ Barracuda deep learning initialized successfully!");
+            // }
+            // else
+            // {
+            //     Debug.LogWarning("⚠️ Barracuda initialization failed - will fallback to LBPH");
+            //     EnableBarracudaRecognition = false;
+            // }
         }
         catch (System.Exception e)
         {
@@ -605,10 +595,10 @@ public class FaceRecognitionManager : MonoBehaviour
             Debug.Log($"✅✅✅ TRAINING COMPLETE! Model can now recognize {_totalPeopleTrained} people.");
             
             // Train Barracuda if enabled
-            if (EnableBarracudaRecognition && _barracudaGenerator != null && _barracudaGenerator.IsInitialized())
-            {
-                TrainBarracudaFromFolders();
-            }
+            // if (EnableBarracudaRecognition && _barracudaGenerator != null && _barracudaGenerator.IsInitialized()) // Removed
+            // {
+            //     TrainBarracudaFromFolders();
+            // }
             
             // Save the trained model for faster startup next time
             string modelPath = Path.Combine(Application.persistentDataPath, ModelSaveFileName);
@@ -722,71 +712,71 @@ public class FaceRecognitionManager : MonoBehaviour
         }
         
         // Try Enhanced OpenCV Recognizer (uses ArcFace embeddings from PC)
-        if (_enhancedRecognizer != null && _enhancedRecognizer.IsReady())
-        {
-            try
-            {
-                string recognizedName = _enhancedRecognizer.RecognizeFace(faceGrayMat);
-                Debug.Log($"🎯 Enhanced OpenCV Recognition: {recognizedName}");
-                return (recognizedName, 1.0); // Default confidence
-            }
-            catch (System.Exception e)
-            {
-                Debug.LogError($"❌ Enhanced OpenCV recognition error: {e.Message}");
-                Debug.Log("🔄 Falling back to TensorFlow Lite recognizer...");
-            }
-        }
+        // _enhancedRecognizer != null && _enhancedRecognizer.IsReady() // Removed
+        // {
+        //     try
+        //     {
+        //         string recognizedName = _enhancedRecognizer.RecognizeFace(faceGrayMat);
+        //         Debug.Log($"🎯 Enhanced OpenCV Recognition: {recognizedName}");
+        //         return (recognizedName, 1.0); // Default confidence
+        //     }
+        //     catch (System.Exception e)
+        //     {
+        //         Debug.LogError($"❌ Enhanced OpenCV recognition error: {e.Message}");
+        //         Debug.Log("🔄 Falling back to TensorFlow Lite recognizer...");
+        //     }
+        // }
         
         // FALLBACK: Try TensorFlow Lite ArcFace Embedding Recognizer
-        if (_embeddingRecognizer != null)
-        {
-            try
-            {
-                string recognizedName = _embeddingRecognizer.RecognizeFace(faceGrayMat);
-                Debug.Log($"🎯 TensorFlow Lite Recognition: {recognizedName}");
-                return (recognizedName, 1.0); // Default confidence since new method doesn't return it
-            }
-            catch (System.Exception e)
-            {
-                Debug.LogError($"❌ TensorFlow Lite recognition error: {e.Message}");
-                if (!FallbackToLBPH)
-                {
-                    return ("Unknown", 0.0);
-                }
-                Debug.Log("🔄 Falling back to FisherFace...");
-            }
-        }
+        // _embeddingRecognizer != null // Removed
+        // {
+        //     try
+        //     {
+        //         string recognizedName = _embeddingRecognizer.RecognizeFace(faceGrayMat);
+        //         Debug.Log($"🎯 TensorFlow Lite Recognition: {recognizedName}");
+        //         return (recognizedName, 1.0); // Default confidence since new method doesn't return it
+        //     }
+        //     catch (System.Exception e)
+        //     {
+        //         Debug.LogError($"❌ TensorFlow Lite recognition error: {e.Message}");
+        //         if (!FallbackToLBPH)
+        //         {
+        //             return ("Unknown", 0.0);
+        //         }
+        //         Debug.Log("🔄 Falling back to FisherFace...");
+        //     }
+        // }
         
         // Try Barracuda deep learning if enabled (deprecated)
-        if (EnableBarracudaRecognition && _barracudaGenerator != null && _barracudaGenerator.IsInitialized())
-        {
-            try
-            {
-                var barracudaResult = _barracudaGenerator.RecognizeFace(faceGrayMat);
-                if (barracudaResult.name != "Unknown")
-                {
-                    Debug.Log($"🎯 Barracuda Recognition: {barracudaResult.name} (confidence: {barracudaResult.confidence:F3})");
-                    return (barracudaResult.name, barracudaResult.confidence);
-                }
-                else if (!FallbackToLBPH)
-                {
-                    return ("Unknown", 0.0);
-                }
-                else
-                {
-                    Debug.Log("🔄 Barracuda failed, falling back to LBPH...");
-                }
-            }
-            catch (System.Exception e)
-            {
-                Debug.LogError($"❌ Barracuda recognition error: {e.Message}");
-                if (!FallbackToLBPH)
-                {
-                    return ("Unknown", 0.0);
-                }
-                Debug.Log("🔄 Falling back to LBPH...");
-            }
-        }
+        // if (EnableBarracudaRecognition && _barracudaGenerator != null && _barracudaGenerator.IsInitialized()) // Removed
+        // {
+        //     try
+        //     {
+        //         var barracudaResult = _barracudaGenerator.RecognizeFace(faceGrayMat);
+        //         if (barracudaResult.name != "Unknown")
+        //         {
+        //             Debug.Log($"🎯 Barracuda Recognition: {barracudaResult.name} (confidence: {barracudaResult.confidence:F3})");
+        //             return (barracudaResult.name, barracudaResult.confidence);
+        //         }
+        //         else if (!FallbackToLBPH)
+        //         {
+        //             return ("Unknown", 0.0);
+        //         }
+        //         else
+        //         {
+        //             Debug.Log("🔄 Barracuda failed, falling back to LBPH...");
+        //         }
+        //     }
+        //     catch (System.Exception e)
+        //     {
+        //         Debug.LogError($"❌ Barracuda recognition error: {e.Message}");
+        //         if (!FallbackToLBPH)
+        //         {
+        //             return ("Unknown", 0.0);
+        //         }
+        //         Debug.Log("🔄 Falling back to LBPH...");
+        //     }
+        // }
         
         // Fallback to LBPH if ArcFace/Barracuda disabled, failed, or not available
         if (!_isModelTrained || _recognizer == null)
@@ -1128,18 +1118,18 @@ public class FaceRecognitionManager : MonoBehaviour
     /// </summary>
     private void TrainBarracudaFromFolders()
     {
-        if (_barracudaGenerator == null || !_barracudaGenerator.IsInitialized())
-        {
-            Debug.LogWarning("⚠️ Barracuda not available for training");
-            return;
-        }
+        // _barracudaGenerator == null || !_barracudaGenerator.IsInitialized() // Removed
+        // {
+        //     Debug.LogWarning("⚠️ Barracuda not available for training");
+        //     return;
+        // }
 
         Debug.Log("🧠 Training Barracuda deep learning model...");
         
         try
         {
             // Clear existing embeddings
-            _barracudaGenerator.ClearKnownFaces();
+            // _barracudaGenerator.ClearKnownFaces(); // Removed
             
             // Get all person names from manifest
             List<string> personNames = GetPersonNamesFromManifest();
@@ -1198,12 +1188,12 @@ public class FaceRecognitionManager : MonoBehaviour
                         Mat processedImage = PreprocessForTraining(grayImage);
                         
                         // Generate embedding
-                        float[] embedding = _barracudaGenerator.GenerateEmbedding(processedImage);
-                        if (embedding != null)
-                        {
-                            _barracudaGenerator.AddKnownFace(personName, embedding);
-                            totalEmbeddings++;
-                        }
+                        // float[] embedding = _barracudaGenerator.GenerateEmbedding(processedImage); // Removed
+                        // if (embedding != null)
+                        // {
+                        //     _barracudaGenerator.AddKnownFace(personName, embedding);
+                        //     totalEmbeddings++;
+                        // }
                         
                         // Cleanup
                         image.Dispose();

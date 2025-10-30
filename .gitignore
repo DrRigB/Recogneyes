@@ -1,39 +1,50 @@
-# ============================================
-# MINIMAL .gitignore for Recogneyes Project
-# Custom OpenCV build - collaborators need everything!
-# ============================================
+# Unity
+/[Ll]ibrary/
+/[Tt]emp/
+/[Oo]bj/
+/[Bb]uild/
+/[Bb]uilds/
+/[Ll]ogs/
+/[Uu]ser[Ss]ettings/
 
-# Unity Library folder (auto-generated, can be huge)
-Library/
+# MemoryCaptures can be huge
+/[Mm]emory[Cc]aptures/
 
-# Temp files
-Temp/
+# Asset Store Tools generated files
+/[Aa]ssets/[Aa]sset[Ss]tore[Tt]ools*
 
-# Build output folder
-Build/
+# Visual Studio / Rider
+/[Ee]xported[Oo]bj/
+.vs/
+.mono/
+*.csproj
+*.unityproj
+*.sln
+*.suo
+*.tmp
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
 
-# Obj folder
-obj/
+# Rider
+.idea/
 
-# Logs
-Logs/
-
-# User-specific settings (don't share personal preferences)
-UserSettings/
-
-# Cursor chat logs (these are huge and not needed)
+# Cursor
 cursor_*.md
 
-# OS files
+# Large Files
+*.onnx
+*.bin
+*.model
+*.pt
+
+# Other
 .DS_Store
 Thumbs.db
-
-# ============================================
-# EVERYTHING ELSE IS COMMITTED:
-# - Assets/ (including OpenCV!)
-# - Packages/
-# - ProjectSettings/
-# - .csproj and .sln files
-# - Built APKs in Build/ folder are ignored above
-# ============================================
 

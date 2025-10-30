@@ -223,7 +223,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   DisplayImage: {fileID: 1551400316}
   FaceBoxLineWidth: 0.003
-  FaceBoxColor: {r: 0, g: 1, b: 0, a: 1}
+  FaceBoxColor: {r: 0.77763015, g: 0.09625311, b: 0.9716981, a: 1}
   EstimatedFaceDepth: 1
   DownsampleFactor: 2
   BoxSizeMultiplier: 1.4
@@ -267,6 +267,9 @@ MonoBehaviour:
   EnableRecognition: 1
   MaxDistanceThreshold: 120
   AutoTrainOnStart: 1
+  UseServerRecognition: 1
+  PrimaryServerURL: http://localhost:5000/recognize
+  FallbackServerURL: http://localhost:5000/recognize
   AnonymousNames:
   - Obama
   - Jshlatt
@@ -274,7 +277,10 @@ MonoBehaviour:
   FaceManifestAsset: {fileID: 11400000, guid: e6e529ac24f35e942ab8eed0e984a917, type: 2}
   TrainingDataFolder: Faces
   ModelSaveFileName: face_recognition_model.yml
+  EnableBarracudaRecognition: 0
+  FallbackToLBPH: 0
   ShowConfidenceScores: 1
+  ForceRetrainOnStart: 0
 --- !u!1001 &1245021031
 PrefabInstance:
   m_ObjectHideFlags: 0

@@ -1,90 +1,79 @@
 # Recogneyes - Magic Leap 2 Face Recognition
 
-A Unity-based face recognition system for Magic Leap 2, designed for nursing home applications.
+This is a complete Unity project for running real-time face recognition on the Magic Leap 2. It uses a Python server to handle the heavy processing of face recognition, while the Unity application captures the video feed, detects faces, and displays the results.
 
-## 🛠️ Setup Instructions
+## Final Submission Setup
 
-### 1. Download Unity
+This guide provides the full "plug and play" instructions to get the project running from a fresh clone.
 
-**Required Unity Version: 2022.3.21f1 LTS**
+### Step 1: Clone the Repository
 
-1. Go to [unity.com](https://unity.com)
-2. Download **Unity Hub**
-3. Open Unity Hub
-4. Go to "Installs" tab
-5. Click "Install Editor"
-6. Select **"2022.3.21f1 LTS"**
-7. **IMPORTANT**: Include "Android Build Support" module
-8. Click "Install"
-
-### 2. Clone This Repository
+First, clone this repository to your local machine using Git.
 
 ```bash
 git clone https://github.com/DrRigB/Recogneyes.git
 cd Recogneyes
 ```
 
-### 3. Open in Unity
+### Step 2: Download and Set Up the Recognition Model
 
-1. Open Unity Hub
-2. Click "Open" → "Add project from disk"
-3. Select the `Recogneyes` folder
-4. Unity will automatically import everything
+The project requires a specific, large model file that is not stored in the Git repository. A PowerShell script is included to download and configure it automatically.
 
-### 4. Build for Magic Leap 2
+1.  **Open PowerShell** in the project's root directory.
+2.  **Run the download script:**
 
-1. **Connect Magic Leap 2** via USB-C
-2. **File** → **Build Settings**
-3. Select **"Android"** platform
-4. Click **"Build and Run"**
-5. Select save location
-6. Unity will build and install automatically
+    ```powershell
+    .\download_assets.ps1
+    ```
 
-## 📁 Project Structure
+This script will:
+1.  Download the `buffalo_l.zip` archive containing the model.
+2.  Extract the archive.
+3.  Find the correct `w600k_r50.onnx` file.
+4.  Move it to `Assets/StreamingAssets/` and rename it to `arcface.onnx`.
+5.  Clean up all temporary files.
 
-```
-Assets/
-├── Scripts/
-│   └── FaceRecognitionManager.cs    # Main recognition logic
-├── StreamingAssets/
-│   └── Faces/
-│       ├── manifest.txt             # List of all people
-│       ├── [PersonName]/
-│       │   ├── image_list.txt       # Auto-generated
-│       │   └── [photos...]
-│       └── Unknown/                  # Unknown face examples
-└── OpenCvSharp/                     # Custom OpenCV build
-```
+This automated process ensures the exact correct model is placed where the server expects to find it.
 
-## 🎮 Adding New Faces
+### Step 3: Generate Face Embeddings
 
-1. **Add photos** to `Assets/StreamingAssets/Faces/[PersonName]/`
-2. **Update manifest** in `Assets/StreamingAssets/Faces/manifest.txt`
-3. **Build and test** on Magic Leap 2
+Before the server can recognize faces, you must generate the "embeddings" file. This is a one-time process that scans your training photos and creates a database of known faces.
 
-## 🔧 Key Features
+1.  **Ensure your training photos are organized** in `Assets/StreamingAssets/Faces/`, with a separate folder for each person.
+2.  **Run the generator script** from your PowerShell terminal:
 
-- **Face Recognition**: LBPH algorithm for reliable recognition
-- **Anonymous Training**: Train on celebrities but show as "Unknown"
-- **Smart Preprocessing**: Handles varying photo qualities
-- **Auto-Manifest**: Automatically generates training data files
-- **Magic Leap 2 Optimized**: Custom OpenCV build included
+    ```powershell
+    python generate_embeddings.py
+    ```
 
-## 🐛 Troubleshooting
+This will create the `face_embeddings.json` file. You only need to re-run this script if you add, remove, or change the training photos.
 
-**"OpenCV not found" errors**
-- Use the included custom OpenCV build (don't replace it)
+### Step 4: Run the Recognition Server
 
-**Build fails on Magic Leap 2**
-- Ensure Android Build Support is installed
-- Check Magic Leap SDK is configured
-- Verify device is in Developer Mode
+The server handles the actual face recognition. It must be running in the background for the Magic Leap app to work.
 
-**Face not recognized**
-- Try adjusting `MaxDistanceThreshold` in Inspector
-- Enable `ForceRetrainOnStart` to retrain
-- Add more training photos (5-10 per person)
+1.  **Keep your PowerShell terminal open.**
+2.  **Run the server start-up script:**
 
----
+    ```powershell
+    .\start_server_with_adb.bat
+    ```
 
-**Note**: This system is designed for nursing home applications where families provide photos to help residents recognize loved ones.
+This script does two things:
+*   Sets up ADB port forwarding so the Magic Leap device can talk to your PC.
+*   Starts the Python Flask server.
+
+You should see the server running and confirming that it has loaded the model and the embeddings. Leave this terminal window open.
+
+### Step 5: Build and Run in Unity
+
+Now you are ready to build the Unity application and deploy it to your device.
+
+1.  **Open Unity Hub** and add the cloned `Recogneyes` project folder.
+2.  **Open the project** in Unity (version 2022.3.21f1 or later is recommended).
+3.  Go to **File > Build Settings**.
+4.  Ensure the platform is set to **Android**.
+5.  Connect your Magic Leap 2 device via USB.
+6.  Click **Build and Run**.
+
+Once the application launches on your headset, it will automatically connect to the running server, and you should see face recognition results appear as you look at people.
